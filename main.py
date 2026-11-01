@@ -4,15 +4,20 @@ import sqlite3
 import logging
 from pathlib import Path
 from datetime import datetime
-from crypto_utils import encrypt_token, decrypt_token
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from crypto_utils import encrypt_token
+
+from telegram import (
+    Update,
+    Bot,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
     ContextTypes,
-    ConversationHandler,
     MessageHandler,
     filters,
 )
@@ -23,7 +28,7 @@ ADMIN_ID = os.getenv("ADMIN_ID")
 DB_FILE = "gamemaker.db"
 LOG_FILE = "gamemaker.log"
 
-# Logging
+# HTTP so'rovlarida tokenli URL logga tushmasin
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -96,7 +101,10 @@ def setup_database():
 
         for game_id, name in games:
             conn.execute(
-                "INSERT OR IGNORE INTO games (game_id, name) VALUES (?, ?)",
+                """
+                INSERT OR IGNORE INTO games (game_id, name)
+                VALUES (?, ?)
+                """,
                 (game_id, name),
             )
 
@@ -141,18 +149,24 @@ def register_user(user):
 
 def user_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(
-            "🎮 O‘yin botini yaratish",
-            callback_data="create"
-        )],
-        [InlineKeyboardButton(
-            "🤖 Mening botlarim",
-            callback_data="mybots"
-        )],
-        [InlineKeyboardButton(
-            "ℹ️ Yordam",
-            callback_data="help"
-        )],
+        [
+            InlineKeyboardButton(
+                "🎮 O‘yin botini yaratish",
+                callback_data="create"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🤖 Mening botlarim",
+                callback_data="mybots"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "ℹ️ Yordam",
+                callback_data="help"
+            )
+        ],
     ])
 
 
@@ -203,6 +217,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user:
         return
 
+    context.user_data.pop("awaiting_token", None)
+    context.user_data.pop("selected_game", None)
+
     if maintenance_enabled() and not is_admin(user.id):
         await update.message.reply_text(
             "🛠 GameMaker hozir texnik xizmat rejimida. "
@@ -215,8 +232,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "🎮 GameMaker botiga xush kelibsiz!\n\n"
-        "Bu platformada o‘zingizning Telegram o‘yin botlaringizni "
-        "yaratishingiz mumkin.",
+        "Bu platformada o‘zingizning Telegram o‘yin "
+        "botlaringizni yaratishingiz mumkin.",
         reply_markup=user_menu(),
     )
 
@@ -234,6 +251,178 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚙️ GAMEMAKER ADMIN PANEL\n\n"
         "Kerakli bo‘limni tanlang:",
         reply_markup=admin_menu(),
+    )
+
+
+async def receive_token(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    message = update.effective_message
+    user = update.effective_user
+    chat = update.effective_chat
+
+    if not message or not user or not chat:
+        return
+
+    if not context.user_data.get("awaiting_token"):
+        return
+
+    if chat.type != "private":
+        return
+
+    token = message.text.strip() if message.text else ""
+
+    # Token xabarini imkon qadar darhol o'chirish
+    try:
+        await message.delete()
+    except Exception:
+        await message.reply_text(
+            "⚠️ Token yuborilgan xabarni o‘chira olmadim. "
+            "Xavfsizlik uchun tokenni BotFather orqali "
+            "yangilashni ko‘rib chiqing."
+        )
+        context.user_data.pop("awaiting_token", None)
+        context.user_data.pop("selected_game", None)
+        return
+
+    if not token or len(token) > 200:
+        await message.reply_text(
+            "❌ Token formati noto‘g‘ri. "
+            "Qaytadan boshlash uchun /start bosing."
+        )
+        return
+
+    game_id = context.user_data.get("selected_game")
+
+    if not game_id:
+        context.user_data.pop("awaiting_token", None)
+        await message.reply_text(
+            "Jarayon bekor qilingan. /start ni bosing."
+        )
+        return
+
+    if maintenance_enabled() and not is_admin(user.id):
+        context.user_data.pop("awaiting_token", None)
+        await message.reply_text(
+            "🛠 GameMaker texnik xizmat rejimida."
+        )
+        return
+
+    with db() as conn:
+        game = conn.execute(
+            "SELECT name FROM games WHERE game_id=? AND enabled=1",
+            (game_id,),
+        ).fetchone()
+
+        count = conn.execute(
+            "SELECT COUNT(*) FROM bots WHERE user_id=?",
+            (user.id,),
+        ).fetchone()[0]
+
+    if not game:
+        context.user_data.pop("awaiting_token", None)
+        await message.reply_text(
+            "Bu o‘yin hozir mavjud emas."
+        )
+        return
+
+    if count >= 5:
+        context.user_data.pop("awaiting_token", None)
+        await message.reply_text(
+            "⛔ Siz 5 ta bot yaratish limitiga yetdingiz."
+        )
+        return
+
+    # Tokenni Telegram orqali tekshirish
+    try:
+        async with Bot(token=token) as test_bot:
+            bot_info = await test_bot.get_me()
+
+    except Exception:
+        logger.warning(
+            "Bot token validation failed for user %s",
+            user.id,
+        )
+
+        await message.reply_text(
+            "❌ Token noto‘g‘ri yoki tekshirib bo‘lmadi.\n\n"
+            "BotFather orqali tokenni tekshiring va "
+            "qaytadan yuboring."
+        )
+        return
+
+    # Tokenni shifrlash
+    try:
+        encrypted_token = encrypt_token(token)
+
+    except Exception:
+        logger.error(
+            "Token encryption failed for user %s",
+            user.id,
+        )
+
+        context.user_data.pop("awaiting_token", None)
+        context.user_data.pop("selected_game", None)
+
+        await message.reply_text(
+            "⚠️ Tokenni xavfsiz saqlashda xatolik yuz berdi. "
+            "Keyinroq urinib ko‘ring."
+        )
+        return
+
+    # Faqat shifrlangan token bazaga yoziladi
+    try:
+        with db() as conn:
+            conn.execute(
+                """
+                INSERT INTO bots (
+                    user_id,
+                    game,
+                    bot_name,
+                    status,
+                    created_at,
+                    encrypted_token
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user.id,
+                    game_id,
+                    f"@{bot_info.username}",
+                    "validated",
+                    datetime.now().isoformat(timespec="seconds"),
+                    encrypted_token,
+                ),
+            )
+
+    except Exception:
+        logger.error(
+            "Bot database save failed for user %s",
+            user.id,
+        )
+
+        await message.reply_text(
+            "⚠️ Bot ma’lumotlarini saqlashda xatolik yuz berdi."
+        )
+        return
+
+    context.user_data.pop("awaiting_token", None)
+    context.user_data.pop("selected_game", None)
+
+    logger.info(
+        "Bot token validated and encrypted for user %s, bot id %s",
+        user.id,
+        bot_info.id,
+    )
+
+    await message.reply_text(
+        "✅ Bot tokeni tekshirildi va xavfsiz saqlandi!\n\n"
+        f"🤖 Bot: @{bot_info.username}\n"
+        f"🎮 O‘yin: {game[0]}\n"
+        "📌 Holati: Tekshirildi\n\n"
+        "Mustaqil botni ishga tushirish keyingi bosqichda ulanadi.",
+        reply_markup=user_menu(),
     )
 
 
@@ -259,6 +448,9 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "create":
+        context.user_data.pop("awaiting_token", None)
+        context.user_data.pop("selected_game", None)
+
         with db() as conn:
             games = conn.execute(
                 "SELECT game_id, name FROM games WHERE enabled=1"
@@ -305,11 +497,17 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        context.user_data["selected_game"] = game_id
+        context.user_data["awaiting_token"] = True
+
         await query.edit_message_text(
             f"✅ Tanlangan o‘yin: {game[0]}\n\n"
-            "Bot yaratishning keyingi bosqichi hali ishlab "
-            "chiqilmoqda. Tez orada token ulash va botni "
-            "sozlash imkoniyati qo‘shiladi."
+            "Endi BotFather orqali o‘zingiz yaratgan "
+            "botning API tokenini yuboring.\n\n"
+            "🔐 Token maxfiy ma’lumot hisoblanadi. "
+            "Uni faqat GameMaker bilan shaxsiy chatda yuboring. "
+            "Hech kimga, jumladan boshqa odamlarga ham bermang.\n\n"
+            "Bekor qilish uchun /start bosing."
         )
 
     elif data == "mybots":
@@ -402,8 +600,13 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "SELECT COUNT(*) FROM bots"
             ).fetchone()[0]
 
+            validated = conn.execute(
+                "SELECT COUNT(*) FROM bots WHERE status='validated'"
+            ).fetchone()[0]
+
         await query.edit_message_text(
-            f"🤖 Jami botlar: {total}\n\n"
+            f"🤖 Jami botlar: {total}\n"
+            f"✅ Tokeni tekshirilgan botlar: {validated}\n\n"
             "Mustaqil botlarni ishga tushirish tizimi "
             "keyingi bosqichda ulanadi.",
             reply_markup=admin_menu(),
@@ -513,6 +716,14 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin))
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            receive_token
+        )
+    )
+
     app.add_handler(CallbackQueryHandler(buttons))
 
     logger.info("GameMaker started")
