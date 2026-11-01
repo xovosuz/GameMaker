@@ -15,13 +15,10 @@ logger = logging.getLogger("GameMaker.BotManager")
 
 DB_FILE = "gamemaker.db"
 
-# Ishlayotgan botlar xotirada saqlanadi.
 running_bots = {}
 
 
 def get_saved_bots():
-    """Ishga tushirilishi kerak bo'lgan botlarni bazadan oladi."""
-
     with sqlite3.connect(DB_FILE) as conn:
         return conn.execute(
             """
@@ -37,20 +34,18 @@ async def child_start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    """Yaratilgan mustaqil botning /start buyrug'i."""
-
     await update.message.reply_text(
         "🎮 Salom! Bu GameMaker orqali yaratilgan "
-        "mustaqil o'yin botidir.\n\n"
-        "O'yin funksiyalari keyingi bosqichda ulanadi."
+        "mustaqil bot.\n\n"
+        "Bot sozlamalari keyingi bosqichda ulanadi."
     )
 
 
 async def start_child_bot(bot_id, encrypted_token):
-    """Bitta mustaqil botni ishga tushiradi."""
-
     if bot_id in running_bots:
         return True
+
+    app = None
 
     try:
         token = decrypt_token(encrypted_token)
@@ -66,8 +61,8 @@ async def start_child_bot(bot_id, encrypted_token):
         )
 
         await app.initialize()
-        await app.start()
         await app.updater.start_polling()
+        await app.start()
 
         running_bots[bot_id] = app
 
@@ -83,6 +78,15 @@ async def start_child_bot(bot_id, encrypted_token):
     except Exception:
         logger.error("Child bot startup failed: ID %s", bot_id)
 
+        if app is not None:
+            try:
+                if app.updater and app.updater.running:
+                    await app.updater.stop()
+                await app.stop()
+                await app.shutdown()
+            except Exception:
+                logger.error("Child bot cleanup failed: ID %s", bot_id)
+
         with sqlite3.connect(DB_FILE) as conn:
             conn.execute(
                 "UPDATE bots SET status='error' WHERE id=?",
@@ -92,9 +96,7 @@ async def start_child_bot(bot_id, encrypted_token):
         return False
 
 
-async def start_all_child_bots():
-    """Bazadagi barcha saqlangan botlarni ishga tushiradi."""
-
+async def start_all_child_bots(application):
     bots = get_saved_bots()
 
     logger.info("Found %s saved child bots", len(bots))
@@ -103,9 +105,7 @@ async def start_all_child_bots():
         await start_child_bot(bot_id, encrypted_token)
 
 
-async def stop_all_child_bots():
-    """Barcha mustaqil botlarni to'xtatadi."""
-
+async def stop_all_child_bots(application):
     for bot_id, app in list(running_bots.items()):
         try:
             if app.updater and app.updater.running:
@@ -113,6 +113,12 @@ async def stop_all_child_bots():
 
             await app.stop()
             await app.shutdown()
+
+            with sqlite3.connect(DB_FILE) as conn:
+                conn.execute(
+                    "UPDATE bots SET status='validated' WHERE id=?",
+                    (bot_id,),
+                )
 
             logger.info("Child bot stopped: ID %s", bot_id)
 
