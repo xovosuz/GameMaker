@@ -4,6 +4,7 @@ import sqlite3
 import logging
 from pathlib import Path
 from datetime import datetime
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -19,11 +20,15 @@ DB_FILE = "gamemaker.db"
 LOG_FILE = "gamemaker.log"
 
 # Logging
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 logging.basicConfig(
     filename=LOG_FILE,
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
+
 logger = logging.getLogger("GameMaker")
 
 
@@ -40,6 +45,7 @@ def setup_database():
                 first_seen TEXT
             )
         """)
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS bots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,7 +56,8 @@ def setup_database():
                 created_at TEXT
             )
         """)
-                columns = {
+
+        columns = {
             row[1]
             for row in conn.execute(
                 "PRAGMA table_info(bots)"
@@ -61,6 +68,7 @@ def setup_database():
             conn.execute(
                 "ALTER TABLE bots ADD COLUMN encrypted_token TEXT"
             )
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS games (
                 game_id TEXT PRIMARY KEY,
@@ -68,6 +76,7 @@ def setup_database():
                 enabled INTEGER DEFAULT 1
             )
         """)
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 setting TEXT PRIMARY KEY,
@@ -102,6 +111,7 @@ def maintenance_enabled():
         result = conn.execute(
             "SELECT value FROM settings WHERE setting='maintenance'"
         ).fetchone()
+
     return result and result[0] == "1"
 
 
@@ -118,6 +128,7 @@ def register_user(user):
                 datetime.now().isoformat(timespec="seconds"),
             ),
         )
+
         conn.execute(
             "UPDATE users SET username=? WHERE user_id=?",
             (user.username or "", user.id),
@@ -126,27 +137,59 @@ def register_user(user):
 
 def user_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎮 O‘yin botini yaratish", callback_data="create")],
-        [InlineKeyboardButton("🤖 Mening botlarim", callback_data="mybots")],
-        [InlineKeyboardButton("ℹ️ Yordam", callback_data="help")],
+        [InlineKeyboardButton(
+            "🎮 O‘yin botini yaratish",
+            callback_data="create"
+        )],
+        [InlineKeyboardButton(
+            "🤖 Mening botlarim",
+            callback_data="mybots"
+        )],
+        [InlineKeyboardButton(
+            "ℹ️ Yordam",
+            callback_data="help"
+        )],
     ])
 
 
 def admin_menu():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("👥 Foydalanuvchilar", callback_data="admin_users"),
-            InlineKeyboardButton("🤖 Botlar", callback_data="admin_bots"),
+            InlineKeyboardButton(
+                "👥 Foydalanuvchilar",
+                callback_data="admin_users"
+            ),
+            InlineKeyboardButton(
+                "🤖 Botlar",
+                callback_data="admin_bots"
+            ),
         ],
         [
-            InlineKeyboardButton("📊 Statistika", callback_data="admin_stats"),
-            InlineKeyboardButton("🎮 O‘yinlar", callback_data="admin_games"),
+            InlineKeyboardButton(
+                "📊 Statistika",
+                callback_data="admin_stats"
+            ),
+            InlineKeyboardButton(
+                "🎮 O‘yinlar",
+                callback_data="admin_games"
+            ),
         ],
         [
-            InlineKeyboardButton("💾 Backup", callback_data="admin_backup"),
-            InlineKeyboardButton("📋 Logs", callback_data="admin_logs"),
+            InlineKeyboardButton(
+                "💾 Backup",
+                callback_data="admin_backup"
+            ),
+            InlineKeyboardButton(
+                "📋 Logs",
+                callback_data="admin_logs"
+            ),
         ],
-        [InlineKeyboardButton("🛠 Maintenance", callback_data="admin_maintenance")],
+        [
+            InlineKeyboardButton(
+                "🛠 Maintenance",
+                callback_data="admin_maintenance"
+            )
+        ],
     ])
 
 
@@ -168,7 +211,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "🎮 GameMaker botiga xush kelibsiz!\n\n"
-        "Bu platformada o‘zingizning Telegram o‘yin botlaringizni yaratishingiz mumkin.",
+        "Bu platformada o‘zingizning Telegram o‘yin botlaringizni "
+        "yaratishingiz mumkin.",
         reply_markup=user_menu(),
     )
 
@@ -177,11 +221,14 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     if not user or not is_admin(user.id):
-        await update.message.reply_text("⛔ Bu bo‘lim faqat admin uchun.")
+        await update.message.reply_text(
+            "⛔ Bu bo‘lim faqat admin uchun."
+        )
         return
 
     await update.message.reply_text(
-        "⚙️ GAMEMAKER ADMIN PANEL\n\nKerakli bo‘limni tanlang:",
+        "⚙️ GAMEMAKER ADMIN PANEL\n\n"
+        "Kerakli bo‘limni tanlang:",
         reply_markup=admin_menu(),
     )
 
@@ -191,7 +238,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     user_id = query.from_user.id
-    data = query.data
+    data = query.data or ""
 
     if maintenance_enabled() and not is_admin(user_id):
         await query.edit_message_text(
@@ -201,7 +248,10 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("admin_") and not is_admin(user_id):
         await query.edit_message_text("⛔ Ruxsat yo‘q.")
-        logger.warning("Unauthorized admin access attempt: %s", user_id)
+        logger.warning(
+            "Unauthorized admin access attempt: %s",
+            user_id
+        )
         return
 
     if data == "create":
@@ -211,7 +261,12 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ).fetchall()
 
         keyboard = [
-            [InlineKeyboardButton(name, callback_data=f"game_{game_id}")]
+            [
+                InlineKeyboardButton(
+                    name,
+                    callback_data=f"game_{game_id}"
+                )
+            ]
             for game_id, name in games
         ]
 
@@ -235,7 +290,9 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ).fetchone()[0]
 
         if not game:
-            await query.edit_message_text("Bu o‘yin hozir mavjud emas.")
+            await query.edit_message_text(
+                "Bu o‘yin hozir mavjud emas."
+            )
             return
 
         if count >= 5:
@@ -246,29 +303,39 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.edit_message_text(
             f"✅ Tanlangan o‘yin: {game[0]}\n\n"
-            "Bot yaratishning keyingi bosqichi hali ishlab chiqilmoqda. "
-            "Tez orada token ulash va botni sozlash imkoniyati qo‘shiladi."
+            "Bot yaratishning keyingi bosqichi hali ishlab "
+            "chiqilmoqda. Tez orada token ulash va botni "
+            "sozlash imkoniyati qo‘shiladi."
         )
 
     elif data == "mybots":
         with db() as conn:
             bots = conn.execute(
-                "SELECT game, bot_name, status FROM bots WHERE user_id=?",
+                """
+                SELECT game, bot_name, status
+                FROM bots
+                WHERE user_id=?
+                """,
                 (user_id,),
             ).fetchall()
 
         if not bots:
-            await query.edit_message_text("Sizda hali yaratilgan botlar yo‘q.")
+            await query.edit_message_text(
+                "Sizda hali yaratilgan botlar yo‘q."
+            )
         else:
             lines = ["🤖 Mening botlarim:"]
+
             for game, name, status in bots:
                 lines.append(f"• {name or game} — {status}")
+
             await query.edit_message_text("\n".join(lines))
 
     elif data == "help":
         await query.edit_message_text(
             "ℹ️ GameMaker yordam bo‘limi\n\n"
-            "Bu yerda o‘zingizning Telegram o‘yin botlaringizni yaratishingiz mumkin."
+            "Bu yerda o‘zingizning Telegram o‘yin "
+            "botlaringizni yaratishingiz mumkin."
         )
 
     elif data == "admin_stats":
@@ -276,14 +343,20 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             users = conn.execute(
                 "SELECT COUNT(*) FROM users"
             ).fetchone()[0]
+
             total_bots = conn.execute(
                 "SELECT COUNT(*) FROM bots"
             ).fetchone()[0]
+
             active_bots = conn.execute(
                 "SELECT COUNT(*) FROM bots WHERE status='running'"
             ).fetchone()[0]
+
             today_users = conn.execute(
-                "SELECT COUNT(*) FROM users WHERE date(first_seen)=date('now','localtime')"
+                """
+                SELECT COUNT(*) FROM users
+                WHERE date(first_seen)=date('now','localtime')
+                """
             ).fetchone()[0]
 
         await query.edit_message_text(
@@ -298,12 +371,21 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_users":
         with db() as conn:
             users = conn.execute(
-                "SELECT user_id, username FROM users ORDER BY first_seen DESC LIMIT 15"
+                """
+                SELECT user_id, username
+                FROM users
+                ORDER BY first_seen DESC
+                LIMIT 15
+                """
             ).fetchall()
 
         lines = ["👥 OXIRGI FOYDALANUVCHILAR:"]
+
         for uid, username in users:
-            lines.append(f"• {uid} — @{username}" if username else f"• {uid}")
+            lines.append(
+                f"• {uid} — @{username}"
+                if username else f"• {uid}"
+            )
 
         await query.edit_message_text(
             "\n".join(lines),
@@ -318,7 +400,8 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.edit_message_text(
             f"🤖 Jami botlar: {total}\n\n"
-            "Mustaqil botlarni ishga tushirish tizimi keyingi bosqichda ulanadi.",
+            "Mustaqil botlarni ishga tushirish tizimi "
+            "keyingi bosqichda ulanadi.",
             reply_markup=admin_menu(),
         )
 
@@ -329,6 +412,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ).fetchall()
 
         lines = ["🎮 O‘YINLAR:"]
+
         for game_id, name, enabled in games:
             status = "🟢 Yoqilgan" if enabled else "🔴 O‘chirilgan"
             lines.append(f"{name}: {status}")
@@ -343,23 +427,30 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         source = sqlite3.connect(DB_FILE)
         destination = sqlite3.connect(backup_path)
-        source.backup(destination)
-        destination.close()
-        source.close()
 
-        with open(backup_path, "rb") as backup_file:
-            await query.message.reply_document(
-                document=backup_file,
-                filename="gamemaker_backup.db",
-                caption="💾 GameMaker ma’lumotlar bazasi zaxirasi",
-            )
+        try:
+            source.backup(destination)
+        finally:
+            destination.close()
+            source.close()
 
-        Path(backup_path).unlink(missing_ok=True)
+        try:
+            with open(backup_path, "rb") as backup_file:
+                await query.message.reply_document(
+                    document=backup_file,
+                    filename="gamemaker_backup.db",
+                    caption="💾 GameMaker ma’lumotlar bazasi zaxirasi",
+                )
+        finally:
+            Path(backup_path).unlink(missing_ok=True)
+
         logger.info("Admin created a database backup")
 
     elif data == "admin_logs":
         if not Path(LOG_FILE).exists():
-            await query.message.reply_text("Hozircha log fayli mavjud emas.")
+            await query.message.reply_text(
+                "Hozircha log fayli mavjud emas."
+            )
             return
 
         with open(LOG_FILE, "rb") as log_file:
@@ -371,19 +462,31 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "admin_maintenance":
         with db() as conn:
-            current = conn.execute(
+            result = conn.execute(
                 "SELECT value FROM settings WHERE setting='maintenance'"
-            ).fetchone()[0]
+            ).fetchone()
 
+            current = result[0] if result else "0"
             new_value = "0" if current == "1" else "1"
 
             conn.execute(
-                "UPDATE settings SET value=? WHERE setting='maintenance'",
+                """
+                INSERT OR REPLACE INTO settings (setting, value)
+                VALUES ('maintenance', ?)
+                """,
                 (new_value,),
             )
 
-        status = "YOQILDI 🛠" if new_value == "1" else "O‘CHIRILDI ✅"
-        logger.info("Maintenance changed to %s by admin", new_value)
+        status = (
+            "YOQILDI 🛠"
+            if new_value == "1"
+            else "O‘CHIRILDI ✅"
+        )
+
+        logger.info(
+            "Maintenance changed to %s by admin",
+            new_value
+        )
 
         await query.edit_message_text(
             f"Maintenance rejimi: {status}",
@@ -396,16 +499,20 @@ def main():
         raise RuntimeError("BOT_TOKEN topilmadi!")
 
     if not ADMIN_ID or not ADMIN_ID.isdigit():
-        raise RuntimeError("ADMIN_ID noto‘g‘ri yoki kiritilmagan!")
+        raise RuntimeError(
+            "ADMIN_ID noto‘g‘ri yoki kiritilmagan!"
+        )
 
     setup_database()
 
     app = Application.builder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(buttons))
 
     logger.info("GameMaker started")
+
     app.run_polling()
 
 
