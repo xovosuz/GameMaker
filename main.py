@@ -721,7 +721,7 @@ def main():
     Application.builder()
     .token(TOKEN)
     .post_init(start_all_child_bots)
-    .post_shutdown(stop_all_child_bots)
+    .post_stop(stop_all_child_bots)
     .build()
 )
 
