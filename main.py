@@ -50,6 +50,17 @@ def setup_database():
                 created_at TEXT
             )
         """)
+                columns = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(bots)"
+            ).fetchall()
+        }
+
+        if "encrypted_token" not in columns:
+            conn.execute(
+                "ALTER TABLE bots ADD COLUMN encrypted_token TEXT"
+            )
         conn.execute("""
             CREATE TABLE IF NOT EXISTS games (
                 game_id TEXT PRIMARY KEY,
