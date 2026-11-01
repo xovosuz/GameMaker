@@ -60,9 +60,9 @@ async def start_child_bot(bot_id, encrypted_token):
             CommandHandler("start", child_start)
         )
 
-        await app.initialize()
-        await app.updater.start_polling()
-        await app.start()
+  await app.initialize()
+await app.start()
+await app.updater.start_polling()
 
         running_bots[bot_id] = app
 
