@@ -6,7 +6,10 @@ from pathlib import Path
 from datetime import datetime
 
 from crypto_utils import encrypt_token
-
+from bot_manager import (
+    start_all_child_bots,
+    stop_all_child_bots,
+)
 from telegram import (
     Update,
     Bot,
@@ -714,7 +717,13 @@ def main():
 
     setup_database()
 
-    app = Application.builder().token(TOKEN).build()
+  app = (
+    Application.builder()
+    .token(TOKEN)
+    .post_init(start_all_child_bots)
+    .post_shutdown(stop_all_child_bots)
+    .build()
+)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin))
